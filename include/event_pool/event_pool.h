@@ -1,35 +1,30 @@
 #pragma once
 
-#include <mutex>
 #include <condition_variable>
-#include <vector>
+#include <mutex>
 #include <queue>
 #include <thread>
+#include <vector>
 
-#include "time_event.h"
+#include "event_pool/time_event.h"
 
 namespace EventPool {
 class EventPool {
  public:
-  explicit EventPool(uint64_t max_count) : max_time_event_count_(max_count), stop_(false) {
-    
-  }
+  explicit EventPool(uint64_t max_count) : max_time_event_count_(max_count), stop_(false) {}
 
   void PushTimeEvent(const TimeEvent& te) {
     std::unique_lock<std::mutex> guard(mut_);
-    not_fill_cv_.wait(guard, [this]() -> bool {
-      return this->timer_queue_.size() < this->max_time_event_count_;
-    });
+    not_fill_cv_.wait(guard, [this]() -> bool { return this->timer_queue_.size() < this->max_time_event_count_; });
     timer_queue_.push(te);
     at_least_one_cv_.notify_all();
   }
 
   void PushTimeEvents(const std::vector<TimeEvent>& tes) {
     std::unique_lock<std::mutex> guard(mut_);
-    not_fill_cv_.wait(guard, [&, this]()->bool {
-      return this->timer_queue_.size() + tes.size() < this->max_time_event_count_;
-    });
-    for(auto& each : tes) {
+    not_fill_cv_.wait(
+        guard, [&, this]() -> bool { return this->timer_queue_.size() + tes.size() < this->max_time_event_count_; });
+    for (auto& each : tes) {
       timer_queue_.push(each);
     }
     at_least_one_cv_.notify_all();
@@ -39,7 +34,7 @@ class EventPool {
     std::vector<TimeEvent> result;
     std::unique_lock<std::mutex> guard(mut_);
     auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now());
-    while(timer_queue_.empty() == false) {
+    while (timer_queue_.empty() == false) {
       if (now >= timer_queue_.top().GetTimePoint()) {
         result.push_back(timer_queue_.top());
         timer_queue_.pop();
@@ -56,11 +51,11 @@ class EventPool {
       not_fill_cv_.notify_all();
       return result;
     }
+    // 情况2 ： 等待至少有一个time_event进队
     if (timer_queue_.empty() == true) {
-      at_least_one_cv_.wait(guard, [this]()->bool {
-        return this->timer_queue_.empty() == false || stop_ == true;
-      });
+      at_least_one_cv_.wait(guard, [this]() -> bool { return this->timer_queue_.empty() == false || stop_ == true; });
     } else {
+      // 情况3 ： 最多等待最近需要被唤醒的time_event的时间，否则就是中途被唤醒（有其他time_event进队）
       std::chrono::milliseconds dt = timer_queue_.top().GetTimePoint() - now;
       at_least_one_cv_.wait_for(guard, dt);
     }
@@ -69,11 +64,11 @@ class EventPool {
   }
 
   void Run() {
-    while(true) {
+    while (true) {
       bool stop = false;
       std::vector<TimeEvent> events = GetReady(stop);
       std::vector<TimeEvent> continue_to;
-      for(auto& each : events) {
+      for (auto& each : events) {
         bool more = each.OnExpire();
         // 对于DURATION类型的事件而言，返回true则表示更新时间戳并继续放入事件池中。
         if (more && each.GetType() == Type::DURATION) {
@@ -108,22 +103,16 @@ class EventPool {
     }
   }
 
-  ~EventPool() {
-    Stop();
-  }
+  ~EventPool() { Stop(); }
 
   void Start() {
-    backend_ = std::thread([this]() {
-      this->Run();
-    });
+    backend_ = std::thread([this]() { this->Run(); });
   }
 
  private:
   std::mutex mut_;
   struct cmp_for_time_event {
-    bool operator()(const TimeEvent& t1, const TimeEvent& t2) {
-      return t1.GetTimePoint() > t2.GetTimePoint();
-    }
+    bool operator()(const TimeEvent& t1, const TimeEvent& t2) { return t1.GetTimePoint() > t2.GetTimePoint(); }
   };
   std::priority_queue<TimeEvent, std::vector<TimeEvent>, cmp_for_time_event> timer_queue_;
   uint64_t max_time_event_count_;
@@ -132,4 +121,4 @@ class EventPool {
   bool stop_;
   std::thread backend_;
 };
-}
+}  // namespace EventPool

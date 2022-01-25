@@ -1,5 +1,5 @@
 #include <iostream>
-#include "event_pool.h"
+#include "event_pool/import.h"
 
 int main() {
   EventPool::EventPool pool(102400);

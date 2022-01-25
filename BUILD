@@ -1,8 +1,8 @@
 
 cc_library(
   name = "event_pool",
-  srcs = ["include/time_event.h"],
-  hdrs = ["include/event_pool.h"],
+  srcs = glob(["include/**/*.h"]),
+  hdrs = glob(["include/**/*.h"]),
   includes = ["include"],
 )
 
