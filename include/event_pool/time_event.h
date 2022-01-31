@@ -1,14 +1,38 @@
 #pragma once
 
+#include <atomic>
 #include <chrono>
 #include <functional>
+#include <future>
 
 namespace EventPool {
 enum class Type {
   TIME_POINT,
   DURATION,
 };
+
+class TimeEventHandler {
+ public:
+  explicit TimeEventHandler(Type type) : type_(type), stop_(false) {}
+
+  // 多次调用只有第一次返回true，之后返回false
+  // 只有time_point类型允许Stop
+  bool Stop() {
+    if (type_ != Type::TIME_POINT) {
+      return false;
+    }
+    bool expect = false;
+    return stop_.compare_exchange_strong(expect, true);
+  }
+
+ private:
+  Type type_;
+  std::atomic<bool> stop_;
+};
+
 class TimeEvent {
+  friend class EventPool;
+
  public:
   using time_type = std::chrono::time_point<std::chrono::steady_clock, std::chrono::milliseconds>;
 
@@ -36,9 +60,14 @@ class TimeEvent {
     call_back_ = std::forward<TaskType>(task);
   }
 
-  bool OnExpire() {
+  bool OnExpire(bool pool_exit) {
+    // 首先检查是否被调用线程Stop，如果是则直接返回false
+    if (type_ == Type::TIME_POINT && !handler_->Stop()) {
+      return false;
+    }
     if (call_back_) {
-      return call_back_();
+      bool result = call_back_(pool_exit);
+      return result;
     }
     return false;
   }
@@ -59,8 +88,9 @@ class TimeEvent {
  private:
   time_type time_point_;
   Type type_;
-  std::function<bool()> call_back_;
+  std::function<bool(bool)> call_back_;
   std::chrono::milliseconds duration_;
+  std::shared_ptr<TimeEventHandler> handler_;
 };
 
 std::chrono::time_point<std::chrono::steady_clock, std::chrono::milliseconds> SecondsAfter(uint64_t sec) {

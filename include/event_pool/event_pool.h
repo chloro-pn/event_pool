@@ -1,6 +1,7 @@
 #pragma once
 
 #include <condition_variable>
+#include <memory>
 #include <mutex>
 #include <queue>
 #include <thread>
@@ -13,21 +14,14 @@ class EventPool {
  public:
   explicit EventPool(uint64_t max_count) : max_time_event_count_(max_count), stop_(false) {}
 
-  void PushTimeEvent(const TimeEvent& te) {
+  std::shared_ptr<TimeEventHandler> PushTimeEvent(TimeEvent&& te) {
     std::unique_lock<std::mutex> guard(mut_);
     not_fill_cv_.wait(guard, [this]() -> bool { return this->timer_queue_.size() < this->max_time_event_count_; });
-    timer_queue_.push(te);
+    te.handler_.reset(new TimeEventHandler(te.type_));
+    auto result = te.handler_;
+    timer_queue_.push(std::move(te));
     at_least_one_cv_.notify_all();
-  }
-
-  void PushTimeEvents(const std::vector<TimeEvent>& tes) {
-    std::unique_lock<std::mutex> guard(mut_);
-    not_fill_cv_.wait(
-        guard, [&, this]() -> bool { return this->timer_queue_.size() + tes.size() < this->max_time_event_count_; });
-    for (auto& each : tes) {
-      timer_queue_.push(each);
-    }
-    at_least_one_cv_.notify_all();
+    return result;
   }
 
   std::vector<TimeEvent> GetReady(bool& stop) {
@@ -63,28 +57,45 @@ class EventPool {
     return result;
   }
 
+  void CleanAllEvent(std::vector<TimeEvent>&& events) {
+    std::unique_lock<std::mutex> guard(mut_);
+    for (auto& each : events) {
+      each.OnExpire(true);
+    }
+    while (timer_queue_.empty() == false) {
+      auto each = timer_queue_.top();
+      each.OnExpire(true);
+      timer_queue_.pop();
+    }
+  }
+
   void Run() {
     while (true) {
       bool stop = false;
-      std::vector<TimeEvent> events = GetReady(stop);
-      std::vector<TimeEvent> continue_to;
-      for (auto& each : events) {
-        bool more = each.OnExpire();
-        // 对于DURATION类型的事件而言，返回true则表示更新时间戳并继续放入事件池中。
-        if (more && each.GetType() == Type::DURATION) {
-          each.UpdateTimePoint();
-          continue_to.push_back(each);
+      try {
+        std::vector<TimeEvent> events = GetReady(stop);
+        if (stop == true) {
+          CleanAllEvent(std::move(events));
+          return;
         }
+        std::vector<TimeEvent> continue_to;
+        for (auto& each : events) {
+          bool more = each.OnExpire(false);
+          // 对于DURATION类型的事件而言，返回true则表示更新时间戳并继续放入事件池中。
+          if (more && each.GetType() == Type::DURATION) {
+            each.UpdateTimePoint();
+            continue_to.push_back(each);
+          }
+        }
+        // 后台线程应该直接加锁并push，然后通知等待在at_least_one_cv_上的线程，不能调用PushTimeEvents，否则引起死锁。
+        std::unique_lock<std::mutex> guard(mut_);
+        for (auto& each : continue_to) {
+          timer_queue_.push(each);
+        }
+        at_least_one_cv_.notify_all();
+      } catch (const std::exception& e) {
+        std::cout << e.what() << std::endl;
       }
-      if (stop == true) {
-        return;
-      }
-      // 后台线程应该直接加锁并push，然后通知等待在at_least_one_cv_上的线程，不能调用PushTimeEvents，否则引起死锁。
-      std::unique_lock<std::mutex> guard(mut_);
-      for (auto& each : continue_to) {
-        timer_queue_.push(each);
-      }
-      at_least_one_cv_.notify_all();
     }
   }
 
