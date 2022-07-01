@@ -10,4 +10,7 @@ cc_binary(
   name = "test",
   deps = [":event_pool"],
   srcs = ["example/test.cc"],
+  linkopts = [
+    "-pthread"
+  ]
 )

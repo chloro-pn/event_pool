@@ -1,4 +1,6 @@
 #include <iostream>
+#include <cmath>
+#include <unordered_map>
 #include "event_pool/import.h"
 
 int main() {
@@ -16,6 +18,31 @@ int main() {
     std::cout << "hello world" << std::endl;
     return true;
   });
+
+  std::unordered_map<int, size_t> count;
+
+  for(int i = 0; i < 20; ++i) {
+    int s = rand() % 20 + 1;
+    auto start_tm = std::chrono::system_clock::now();
+    EventPool::TimeEvent time_eventi{std::chrono::milliseconds(s * 1000)};
+    time_eventi.SetCallBack([start_tm, i, s, &count](bool exit) -> bool {
+      if (exit == true) {
+        std::cout << "pool exit, event " << i << " get the notify" << std::endl;
+        return false;
+      }
+      auto expire_tm = std::chrono::system_clock::now();
+      int uses = std::chrono::duration_cast<std::chrono::milliseconds>(expire_tm - start_tm).count();
+      count[i] += 1;
+      double delta = uses / ((double)s * 1000) - count[i];
+      if (std::abs(delta) >= 1e-2) {
+        std::cerr << "time event " << i << " expired error, " << uses << " " << s << " " << count[i] << std::endl;
+      } else {
+        std::cout << "time event " << i << " expired succ" << std::endl;
+      }
+      return true;
+    });
+    pool.PushTimeEvent(std::move(time_eventi));
+  }
   // TimeEvent的初始化有两种模式，第一种如上所示，传入一个std::chrono::duration，代表周期性的经过一段时间后触发，
   // 这种模式下回调函数的返回值具有意义：如果返回为true则会更新触发时间（调用时的时间+初始化时的duration）并再次加入等待队列中
   // 从而可以反复触发。
@@ -43,7 +70,7 @@ int main() {
   if (succ == true) {
     std::cout << "time event stop succ!" << std::endl;
   }
-  std::this_thread::sleep_for(std::chrono::seconds(7));
+  std::this_thread::sleep_for(std::chrono::seconds(20));
   // 在需要停止定时器时调用Stop函数，该函数会通知后台线程，将所有还未就绪的定时器事件的回调函数传入true并调用，然后回收后台线程并返回。
   // 该函数可以手动调用，不调用的话会在EventPool的析构函数中调用，可以跨线程的多次调用。
   pool.Stop();
